@@ -1,122 +1,181 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>ระบบเช็คชื่อเข้าเรียน</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-  <style>
-    body { font-family: 'Kanit', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-  </style>
-  <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600&display=swap" rel="stylesheet">
-</head>
-<body class="min-h-screen flex items-center justify-center p-4 text-gray-800">
+// --- ตั้งค่าตัวแปร (อย่าลืมเปลี่ยนเป็น Key ใหม่เพื่อความปลอดภัยนะครับ) ---
+const LINE_ACCESS_TOKEN = 'ใส่_LINE_ACCESS_TOKEN_ใหม่ที่นี่';
+const GEMINI_API_KEY = 'ใส่_GEMINI_API_KEY_ใหม่ที่นี่';
+const SHEET_ID = '17DOifrj6Tff_6QFyFURV5dQ4PsR5xq5rOgWg6GmcUNI'; 
+const SHEET_NAME = 'Sheet1'; 
 
-  <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center transition-all duration-300">
-    <div class="flex flex-col items-center">
-      <div class="relative">
-        <img id="userPicture" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a0aec0'><path d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/></svg>" class="w-24 h-24 rounded-full border-4 border-indigo-500 shadow-md object-cover">
-      </div>
-      <h2 id="userName" class="text-xl font-bold mt-4 text-gray-700">กำลังโหลดข้อมูล...</h2>
-      <p id="userIdDisplay" class="text-xs text-gray-400 mt-1 font-mono break-all"></p>
-    </div>
+// --- 2. ตั้งค่าสถานที่เช็คชื่อ (พิกัดและระยะ) ---
+const TARGET_LAT = 19.5564; 
+const TARGET_LNG = 99.7373; 
+const ALLOWED_RADIUS = 100;  // ระยะห่างที่อนุญาต (หน่วย: เมตร)
 
-    <div class="mt-8 space-y-3">
-      <button onclick="requestLocationAndCheckIn('มาเรียน')" class="w-full bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-medium py-3 px-6 rounded-xl shadow-lg transition-all duration-150">
-        📍 มาเรียน (เช็คพิกัด)
-      </button>
-      <button onclick="sendCheckIn('ลา', null, null)" class="w-full bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-medium py-3 px-6 rounded-xl shadow-lg transition-all duration-150">
-        ✉️ ลาเรียน
-      </button>
-    </div>
+// ==========================================
+// ส่วนรับข้อมูล Webhook จาก LINE & LIFF Fetch
+// ==========================================
+function doPost(e) {
+  if (!e || !e.postData || !e.postData.contents) return ContentService.createTextOutput("OK");
 
-    <div id="statusMessage" class="hidden mt-6 p-3 rounded-lg text-sm font-medium"></div>
-  </div>
+  const data = JSON.parse(e.postData.contents);
+  const now = new Date();
+  const dateStr = Utilities.formatDate(now, "GMT+7", "dd/MM/yyyy");
 
-  <script>
-    // ⚠️ ตั้งค่า ID และ URL เหมือนเดิม
-    const LIFF_ID = "2010265713-TY9AG6dR"; 
-    const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzxkzkg9NaPBEBcr9pRzrCZieXcUYMku7OiCZA1h1bKEXknV_kncClO0mp5CVCVxbJzAg/exec";
-
-    window.onload = function () {
-      initializeLiff();
-    }
-
-    function initializeLiff() {
-      liff.init({ liffId: LIFF_ID }).then(() => {
-        if (!liff.isLoggedIn()) liff.login();
-        else getUserProfile();
-      }).catch(err => showStatus("โหลด LIFF ไม่สำเร็จ", false));
-    }
-
-    function getUserProfile() {
-      liff.getProfile().then(profile => {
-        document.getElementById("userName").innerText = "สวัสดี, " + profile.displayName;
-        document.getElementById("userIdDisplay").innerText = "ID: " + profile.userId;
-        if (profile.pictureUrl) document.getElementById("userPicture").src = profile.pictureUrl;
-      }).catch(err => showStatus("ดึงโปรไฟล์ไม่สำเร็จ", false));
-    }
-
-    // ฟังก์ชันขอพิกัด GPS ก่อนเช็คชื่อ "มาเรียน"
-    function requestLocationAndCheckIn(status) {
-      showStatus("กำลังตรวจสอบพิกัด GPS...", null);
-      if (!navigator.geolocation) {
-        showStatus("เบราว์เซอร์ของคุณไม่รองรับการดึงพิกัด GPS", false);
-        return;
+  // === A. รับข้อมูลจากหน้าเว็บ LIFF ===
+  if (data.action === 'liff_checkin') {
+    try {
+      // 1. เช็คว่าเป็นการ "มาเรียน" และมีการส่งพิกัดมาหรือไม่
+      if (data.status === 'มาเรียน') {
+        if (!data.latitude || !data.longitude) {
+           return sendJsonResponse(false, "ไม่พบพิกัด GPS กรุณาเปิดระบบ Location");
+        }
+        
+        // คำนวณระยะทาง
+        const distance = calculateDistance(data.latitude, data.longitude, TARGET_LAT, TARGET_LNG);
+        if (distance > ALLOWED_RADIUS) {
+           return sendJsonResponse(false, `คุณอยู่นอกพื้นที่ (${Math.round(distance)} เมตรจากจุดเช็คชื่อ)`);
+        }
       }
 
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const lat = position.coords.latitude;
-          const lng = position.coords.longitude;
-          sendCheckIn(status, lat, lng); // ส่งพิกัดไปให้เซิร์ฟเวอร์
-        },
-        (error) => {
-          showStatus("กรุณาเปิดอนุญาตให้เข้าถึงตำแหน่งที่ตั้ง (GPS)", false);
-        },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-      );
-    }
+      // 2. เช็คว่าวันนี้เคยบันทึกข้อมูลไปแล้วหรือยัง
+      if (hasCheckedInToday(data.userId, dateStr)) {
+        return sendJsonResponse(false, "วันนี้คุณได้ทำการเช็คชื่อไปแล้วครับ");
+      }
 
-    // ฟังก์ชันส่งข้อมูลไป GAS
-    function sendCheckIn(status, lat, lng) {
-      showStatus("กำลังประมวลผลข้อมูล...", null);
+      // 3. บันทึกข้อมูลหากผ่านเงื่อนไขทั้งหมด
+      saveDataToSheet(data.userId, data.displayName, data.status, 'LIFF');
+      return sendJsonResponse(true, `บันทึกสถานะ "${data.status}" เรียบร้อยแล้ว`);
       
-      liff.getProfile().then(profile => {
-        const payload = {
-          action: "liff_checkin",
-          userId: profile.userId,
-          displayName: profile.displayName,
-          status: status,
-          latitude: lat,
-          longitude: lng
-        };
+    } catch (error) {
+      return sendJsonResponse(false, "System Error: " + error.toString());
+    }
+  }
 
-        fetch(GAS_WEB_APP_URL, {
-          method: "POST",
-          body: JSON.stringify(payload)
-        })
-        .then(response => response.json())
-        .then(data => {
-          if (data.success) {
-            showStatus(`✅ ${data.message}`, true);
-            setTimeout(() => liff.closeWindow(), 2500);
-          } else {
-            showStatus(`❌ ${data.message}`, false);
-          }
-        })
-        .catch(error => showStatus("เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์", false));
-      });
+  // === B. รับข้อความแชทจาก LINE ===
+  const event = data.events[0];
+  if (event && event.type === 'message' && event.message.type === 'text') {
+    const text = event.message.text.trim();
+    const userId = event.source.userId;
+    const replyToken = event.replyToken;
+
+    if (text === 'มาเรียน') {
+      replyText(replyToken, "📍 เพื่อความถูกต้อง กรุณากดปุ่มเช็คชื่อผ่าน menus (LIFF) เพื่อยืนยันพิกัดสถานที่ครับ");
+    } 
+    else if (text === 'ลา' || text === 'ขาด') {
+      const profile = getUserProfile(userId);
+      const displayName = profile.displayName || "ไม่ทราบชื่อ";
+      
+      if (hasCheckedInToday(userId, dateStr)) {
+        replyText(replyToken, "⚠️ วันนี้คุณได้ทำการบันทึกข้อมูลไปแล้วครับ");
+      } else {
+        saveDataToSheet(userId, displayName, text, 'Chat');
+        replyText(replyToken, `✅ บันทึกสถานะ "${text}" เรียบร้อยครับ`);
+      }
+    } 
+    else if (/สรุป|ยอด|ประวัติ|กี่ครั้ง|ขาดเรียน|เช็คชื่อ|รายงาน/i.test(text)) {
+      const profile = getUserProfile(userId);
+      const attendanceSummary = getUserAttendanceSummary(userId);
+      const geminiResponse = callGeminiWithAttendance(text, profile.displayName, attendanceSummary);
+      replyText(replyToken, geminiResponse);
+    } 
+    else {
+      replyText(replyToken, callGemini(text));
+    }
+  }
+  
+  return ContentService.createTextOutput("OK");
+}
+
+// ==========================================
+// ฟังก์ชัน Helper ต่างๆ
+// ==========================================
+
+function sendJsonResponse(successStatus, messageText) {
+  const result = JSON.stringify({ success: successStatus, message: messageText });
+  return ContentService.createTextOutput(result).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ตรวจสอบการเช็คชื่อซ้ำ (ปรับปรุงเพื่อป้องกัน Bug จาก Object Date ของ Google Sheets)
+function hasCheckedInToday(userId, currentDate) {
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+  
+  for (let i = 1; i < data.length; i++) {
+    let cellDate = data[i][0];
+    
+    // ตรวจสอบและแปลงค่าให้เป็นข้อความฟอร์แมต dd/MM/yyyy ก่อนทำการเปรียบเทียบ
+    if (cellDate instanceof Date) {
+      cellDate = Utilities.formatDate(cellDate, "GMT+7", "dd/MM/yyyy");
+    } else if (cellDate) {
+      cellDate = cellDate.toString();
     }
 
-    function showStatus(msg, success) {
-      const statusBox = document.getElementById("statusMessage");
-      statusBox.innerText = msg;
-      statusBox.classList.remove("hidden", "bg-emerald-100", "text-emerald-800", "bg-rose-100", "text-rose-800", "bg-indigo-100", "text-indigo-800");
-      if (success === true) statusBox.classList.add("bg-emerald-100", "text-emerald-800");
-      else if (success === false) statusBox.classList.add("bg-rose-100", "text-rose-800");
-      else statusBox.classList.add("bg-indigo-100", "text-indigo-800");
+    if (cellDate === currentDate && data[i][3] === userId) {
+      return true; 
     }
-  </script>
-</body>
-</html>
+  }
+  return false;
+}
+
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371e3; 
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c; 
+}
+
+function saveDataToSheet(userId, displayName, status, source) {
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+  const now = new Date();
+  const dateStr = Utilities.formatDate(now, "GMT+7", "dd/MM/yyyy");
+  const timeStr = Utilities.formatDate(now, "GMT+7", "HH:mm:ss");
+  sheet.appendRow([dateStr, timeStr, displayName, userId, status, source]);
+}
+
+// ดึงสรุปยอด (ปรับปรุงฟอร์แมตวันที่ในส่วนประวัติการเช็คชื่อย้อนหลัง)
+function getUserAttendanceSummary(userId) {
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+  let present = 0, leave = 0, absent = 0, historyLogs = [];
+  
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][3] === userId) {
+      if (data[i][4] === 'มาเรียน') present++;
+      else if (data[i][4] === 'ลา') leave++;
+      else if (data[i][4] === 'ขาด') absent++;
+      
+      let logDate = data[i][0];
+      if (logDate instanceof Date) {
+        logDate = Utilities.formatDate(logDate, "GMT+7", "dd/MM/yyyy");
+      }
+      historyLogs.push(`- วันที่ ${logDate}: ${data[i][4]}`);
+    }
+  }
+  return { present, leave, absent, total: present+leave+absent, history: historyLogs.slice(-5).join('\n') };
+}
+
+function getUserProfile(userId) {
+  const res = UrlFetchApp.fetch(`https://api.line.me/v2/bot/profile/${userId}`, { headers: { 'Authorization': 'Bearer ' + LINE_ACCESS_TOKEN }, muteHttpExceptions: true });
+  return JSON.parse(res.getContentText());
+}
+
+function replyText(replyToken, text) {
+  UrlFetchApp.fetch('https://api.line.me/v2/bot/message/reply', { method: 'post', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_ACCESS_TOKEN }, payload: JSON.stringify({ replyToken: replyToken, messages: [{'type': 'text', 'text': text}] }) });
+}
+
+function callGemini(text) {
+  const res = UrlFetchApp.fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, { method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: JSON.stringify({ "contents": [{ "parts": [{"text": text}] }] }) });
+  const json = JSON.parse(res.getContentText());
+  return json.error ? "Error: " + json.error.message : json.candidates[0].content.parts[0].text;
+}
+
+function callGeminiWithAttendance(text, name, summary) {
+  const instruction = `ข้อมูลเช็คชื่อคุณ ${name}: มา ${summary.present}, ลา ${summary.leave}, ขาด ${summary.absent}. ประวัติล่าสุด:\n${summary.history||"ไม่มี"}\nตอบกลับอย่างเป็นมิตร`;
+  const res = UrlFetchApp.fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, { method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: JSON.stringify({ "contents": [{ "parts": [{"text": text}] }], "systemInstruction": { "parts": [{"text": instruction}] } }) });
+  const json = JSON.parse(res.getContentText());
+  return json.error ? "Error: " + json.error.message : json.candidates[0].content.parts[0].text;
+}

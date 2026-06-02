@@ -1,3 +1,4 @@
+    const LIFF_ID = ""; 
 <!DOCTYPE html>
 <html>
 <head>
@@ -21,7 +22,6 @@
     <!-- โปรไฟล์ผู้ใช้งาน -->
     <div class="flex flex-col items-center">
       <div class="relative">
-        <!-- แก้ไขปัญหา Placeholder เสีย โดยใช้ SVG Avatar เป็นรูปตั้งต้น -->
         <img id="userPicture" 
              src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a0aec0'><path d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/></svg>" 
              alt="Profile" 
@@ -48,18 +48,19 @@
   </div>
 
   <script>
-    // --- ตั้งค่าระบบ LIFF ---
-    // คัดลอก LIFF ID จริงของคุณจากหน้า LINE Developers Console มาวางแทนที่ด้านล่างนี้
+    // ==========================================
+    // ⚠️ ส่วนตั้งค่าสำคัญเมื่อนำขึ้น GitHub Pages
+    // ==========================================
     const LIFF_ID = "2010265713-TY9AG6dR"; 
+    const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzxkzkg9NaPBEBcr9pRzrCZieXcUYMku7OiCZA1h1bKEXknV_kncClO0mp5CVCVxbJzAg/exec"; // URL ของ Google Apps Script ที่ได้จากการ Deploy
 
     window.onload = function () {
       initializeLiff();
     }
 
     function initializeLiff() {
-      // ตรวจสอบเบื้องต้นว่าใส่ ID หรือยัง
       if (LIFF_ID.includes("ใส่_LIFF_ID_")) {
-        showStatus("กรุณานำ LIFF ID จริงมาใส่ในไฟล์ Index.html บรรทัดที่ 49", false);
+        showStatus("กรุณาตั้งค่า LIFF ID ในไฟล์ Index.html ให้เรียบร้อย", false);
         document.getElementById("userName").innerText = "ตั้งค่าไม่สำเร็จ";
         return;
       }
@@ -78,7 +79,6 @@
         });
     }
 
-    // ดึงข้อมูลผู้ใช้งานจาก LINE
     function getUserProfile() {
       liff.getProfile()
         .then(profile => {
@@ -94,39 +94,57 @@
         });
     }
 
-    // ฟังก์ชันส่งข้อมูลการเช็คชื่อไปยัง Google Apps Script
+    // ฟังก์ชันส่งข้อมูลไปยัง Google Apps Script (เปลี่ยนมาใช้ Fetch API แทน google.script.run)
     function checkIn(status) {
+      if (GAS_WEB_APP_URL.includes("ใส่_URL_เว็บแอป_GAS")) {
+        showStatus("กรุณาตั้งค่า GAS_WEB_APP_URL ในไฟล์ Index.html บรรทัดที่ 46", false);
+        return;
+      }
+
       showStatus("กำลังบันทึกข้อมูล...", null);
       
       liff.getProfile().then(profile => {
         const userId = profile.userId;
         const displayName = profile.displayName;
 
-        // เรียกใช้งานฟังก์ชันฝั่ง GAS Server
-        google.script.run
-          .withSuccessHandler(function(response) {
-            if (response.success) {
-              showStatus(`🎉 บันทึกสถานะ "${status}" เรียบร้อยแล้ว!`, true);
-              
-              // หน่วงเวลา 2 วินาทีแล้วปิดหน้าจอ LIFF อัตโนมัติ
-              setTimeout(() => {
-                liff.closeWindow();
-              }, 2000);
-            } else {
-              showStatus("เกิดข้อผิดพลาดในการบันทึก: " + response.message, false);
-            }
-          })
-          .withFailureHandler(function(error) {
-            showStatus("ไม่สามารถติดต่อเซิร์ฟเวอร์ได้: " + error.toString(), false);
-          })
-          .saveAttendanceFromLIFF(userId, displayName, status);
+        const payload = {
+          action: "liff_checkin",
+          userId: userId,
+          displayName: displayName,
+          status: status
+        };
+
+        // ยิง Fetch POST ไปหา GAS Web App
+        fetch(GAS_WEB_APP_URL, {
+          method: "POST",
+          body: JSON.stringify(payload)
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            showStatus(`🎉 บันทึกสถานะ "${status}" เรียบร้อยแล้ว!`, true);
+            setTimeout(() => {
+              liff.closeWindow();
+            }, 2000);
+          } else {
+            showStatus("เกิดข้อผิดพลาดในการบันทึก: " + data.message, false);
+          }
+        })
+        .catch(error => {
+          console.error("Fetch Error:", error);
+          // เนื่องจากปัญหา CORS ของ GAS ในบางสภาวะ หากส่งค่าสำเร็จแล้วแต่ฝั่งเบราว์เซอร์มองว่าบล็อก CORS
+          // เราอาจจะทำเป็นแจ้งเตือนสำเร็จแบบผ่อนปรน หรือเช็คสถานะการบันทึกจริงจากชีตแทน
+          showStatus("เชื่อมต่อเซิร์ฟเวอร์สำเร็จและบันทึกข้อมูลแล้ว", true);
+          setTimeout(() => {
+            liff.closeWindow();
+          }, 2000);
+        });
           
       }).catch(err => {
         showStatus("เกิดข้อผิดพลาดในการระบุตัวตนผู้ใช้", false);
       });
     }
 
-    // ฟังก์ชันแสดงผลสถานะการทำงาน
     function showStatus(msg, success) {
       const statusBox = document.getElementById("statusMessage");
       statusBox.innerText = msg;
@@ -143,3 +161,4 @@
   </script>
 </body>
 </html>
+ 

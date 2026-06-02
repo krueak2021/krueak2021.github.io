@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>ระบบเช็คชื่อเข้าเรียน</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- LINE LIFF SDK -->
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    body {
+      font-family: 'Kanit', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+<body class="min-h-screen flex items-center justify-center p-4 text-gray-800">
+
+  <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center transition-all duration-300">
+    
+    <!-- โปรไฟล์ผู้ใช้งาน -->
+    <div class="flex flex-col items-center">
+      <div class="relative">
+        <!-- แก้ไขปัญหา Placeholder เสีย โดยใช้ SVG Avatar เป็นรูปตั้งต้น -->
+        <img id="userPicture" 
+             src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a0aec0'><path d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/></svg>" 
+             alt="Profile" 
+             class="w-24 h-24 rounded-full border-4 border-indigo-500 shadow-md object-cover"
+             onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'%23a0aec0\'><path d=\'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z\'/></svg>';">
+      </div>
+      <h2 id="userName" class="text-xl font-bold mt-4 text-gray-700">กำลังโหลดข้อมูล...</h2>
+      <p id="userIdDisplay" class="text-xs text-gray-400 mt-1 font-mono break-all"></p>
+    </div>
+
+    <!-- ส่วนเลือกสถานะ -->
+    <div class="mt-8 space-y-3">
+      <button onclick="checkIn('มาเรียน')" class="w-full bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-medium py-3 px-6 rounded-xl shadow-lg transition-all duration-150">
+        🙋‍♂️ มาเรียน
+      </button>
+      <button onclick="checkIn('ลา')" class="w-full bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-medium py-3 px-6 rounded-xl shadow-lg transition-all duration-150">
+        ✉️ ลาเรียน
+      </button>
+    </div>
+
+    <!-- สถานะการประมวลผล -->
+    <div id="statusMessage" class="hidden mt-6 p-3 rounded-lg text-sm font-medium"></div>
+
+  </div>
+
+  <script>
+    // --- ตั้งค่าระบบ LIFF ---
+    // คัดลอก LIFF ID จริงของคุณจากหน้า LINE Developers Console มาวางแทนที่ด้านล่างนี้
+    const LIFF_ID = "2010265713-TY9AG6dR"; 
+
+    window.onload = function () {
+      initializeLiff();
+    }
+
+    function initializeLiff() {
+      // ตรวจสอบเบื้องต้นว่าใส่ ID หรือยัง
+      if (LIFF_ID.includes("ใส่_LIFF_ID_")) {
+        showStatus("กรุณานำ LIFF ID จริงมาใส่ในไฟล์ Index.html บรรทัดที่ 49", false);
+        document.getElementById("userName").innerText = "ตั้งค่าไม่สำเร็จ";
+        return;
+      }
+
+      liff.init({ liffId: LIFF_ID })
+        .then(() => {
+          if (!liff.isLoggedIn()) {
+            liff.login();
+          } else {
+            getUserProfile();
+          }
+        })
+        .catch((err) => {
+          console.error("LIFF Initialization failed", err);
+          showStatus("เกิดข้อผิดพลาดในการโหลดระบบ LINE LIFF: " + err.message, false);
+        });
+    }
+
+    // ดึงข้อมูลผู้ใช้งานจาก LINE
+    function getUserProfile() {
+      liff.getProfile()
+        .then(profile => {
+          document.getElementById("userName").innerText = "สวัสดี, " + profile.displayName;
+          document.getElementById("userIdDisplay").innerText = "ID: " + profile.userId;
+          if (profile.pictureUrl) {
+            document.getElementById("userPicture").src = profile.pictureUrl;
+          }
+        })
+        .catch(err => {
+          console.error("Error getting profile", err);
+          showStatus("ดึงข้อมูลโปรไฟล์ไม่สำเร็จ", false);
+        });
+    }
+
+    // ฟังก์ชันส่งข้อมูลการเช็คชื่อไปยัง Google Apps Script
+    function checkIn(status) {
+      showStatus("กำลังบันทึกข้อมูล...", null);
+      
+      liff.getProfile().then(profile => {
+        const userId = profile.userId;
+        const displayName = profile.displayName;
+
+        // เรียกใช้งานฟังก์ชันฝั่ง GAS Server
+        google.script.run
+          .withSuccessHandler(function(response) {
+            if (response.success) {
+              showStatus(`🎉 บันทึกสถานะ "${status}" เรียบร้อยแล้ว!`, true);
+              
+              // หน่วงเวลา 2 วินาทีแล้วปิดหน้าจอ LIFF อัตโนมัติ
+              setTimeout(() => {
+                liff.closeWindow();
+              }, 2000);
+            } else {
+              showStatus("เกิดข้อผิดพลาดในการบันทึก: " + response.message, false);
+            }
+          })
+          .withFailureHandler(function(error) {
+            showStatus("ไม่สามารถติดต่อเซิร์ฟเวอร์ได้: " + error.toString(), false);
+          })
+          .saveAttendanceFromLIFF(userId, displayName, status);
+          
+      }).catch(err => {
+        showStatus("เกิดข้อผิดพลาดในการระบุตัวตนผู้ใช้", false);
+      });
+    }
+
+    // ฟังก์ชันแสดงผลสถานะการทำงาน
+    function showStatus(msg, success) {
+      const statusBox = document.getElementById("statusMessage");
+      statusBox.innerText = msg;
+      statusBox.classList.remove("hidden", "bg-emerald-100", "text-emerald-800", "bg-rose-100", "text-rose-800", "bg-indigo-100", "text-indigo-800");
+      
+      if (success === true) {
+        statusBox.classList.add("bg-emerald-100", "text-emerald-800");
+      } else if (success === false) {
+        statusBox.classList.add("bg-rose-100", "text-rose-800");
+      } else {
+        statusBox.classList.add("bg-indigo-100", "text-indigo-800");
+      }
+    }
+  </script>
+</body>
+</html>
